@@ -178,14 +178,15 @@ def main(args):
     criterion = build_criterion(args)
     
     train_set, train_loader = build_loader(args=args)
-    valid_set, valid_loader = build_loader(args=args, mode='test')
+    valid_set, valid_loader = build_loader(args=args, mode='val')
+    test_set, test_loader = build_loader(args=args, mode='test')
 
     # evaluate
     if args.evaluate:
         if is_main_process():
             torch.cuda.empty_cache()
             print('evaluating........')
-            tester = Tester(args, model_without_ddp, valid_loader, criterion, [accuracy, sensitivity_multi, specificity_multi], save_results=[plot_result, plot_matrix])
+            tester = Tester(args, model_without_ddp, test_loader, criterion, [accuracy, sensitivity_multi, specificity_multi], save_results=[plot_result, plot_matrix])
             tester.test(mode='in')
         return
 
@@ -198,7 +199,7 @@ def main(args):
     trainer.train()
 
     if is_main_process():
-        tester = Tester(args, model_without_ddp, valid_loader, criterion, [accuracy, sensitivity_multi, specificity_multi], save_results=[plot_result, plot_matrix])
+        tester = Tester(args, model_without_ddp, test_loader, criterion, [accuracy, sensitivity_multi, specificity_multi], save_results=[plot_result, plot_matrix])
         tester.test()
 
 if __name__ == '__main__':
