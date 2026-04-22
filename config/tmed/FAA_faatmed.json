@@ -1,0 +1,18 @@
+{
+    "aggr": "transformer",
+    "ratio": 0.7,
+    "views": 3,
+    "text_prompt":
+    [
+        "In the PLAX view, no aortic stenosis shows normal thin aortic valve leaflets with full systolic opening and no thickening, calcification, or turbulence.",
+        "In the PLAX view, early aortic stenosis shows mild thickening of the aortic valve leaflets with nearly normal opening and no obvious doming or turbulence.",
+        "In the PLAX view, significant aortic stenosis shows thickened, calcified, and immobile aortic valve leaflets with restricted systolic opening, left ventricular hypertrophy, and turbulent high-velocity flow.",
+        "In the PSAX view, no aortic stenosis shows normal thin aortic valve cusps with complete and regular systolic opening.",
+        "In the PSAX view, early aortic stenosis shows mild thickening of the aortic valve cusps with almost normal opening area.",
+        "In the PSAX view, severe aortic stenosis shows thickened, calcified, and poorly mobile aortic valve cusps with reduced and irregular systolic opening area.",
+        "No abnormal features related to aortic stenosis are observed in other ultrasound views.",
+        "No specific abnormal features of early aortic stenosis are observed in other ultrasound views.",
+        "In other cardiac ultrasound views besides PLAX and PSAX, significant aortic stenosis shows no additional specific visual features."
+     ]
+    
+}
