@@ -1,6 +1,6 @@
 {
     "aggr": "transformer",
-    "ratio": 0.7,
+    "ratio": 0.5,
     "views": 3,
     "text_prompt":
     [
