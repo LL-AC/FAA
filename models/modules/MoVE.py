@@ -68,7 +68,49 @@ class MoVE(nn.Module):
         self.gate = GatingNetwork(input_dim, view_experts, topk=self.topk)
         
     def forward(self, x):
-        pass
+        # x shape: (batch_size, input_dim)
+        batch_size = x.size(0)
+        
+        # 获取每个专家的权重和选择的专家索引
+        # gate_weights: (batch_size, num_experts)
+        # expert_indices: (batch_size, topk) - 每个样本选择的专家索引
+        gate_weights, expert_indices, raw_scores = self.gate(x)
+        
+        # 每个专家的输出 (batch_size, output_dim)
+        expert_outputs = [expert(x) for expert in self.view_experts]
+        
+        # 将专家输出堆叠 (num_experts, batch_size, output_dim)
+        expert_outputs = torch.stack(expert_outputs)
+        
+        # 转置为 (batch_size, num_experts, output_dim)
+        expert_outputs = expert_outputs.permute(1, 0, 2)
+        
+        # 门控权重与专家输出相乘并求和 (batch_size, output_dim)
+        # 扩展门控权重维度以便广播 (batch_size, num_experts, 1)
+        gate_weights = gate_weights.unsqueeze(-1)
+        moe_output = torch.sum(gate_weights * expert_outputs, dim=1)
+
+        moe_output += self.shared_experts(x)
+        
+        # --------------------------
+        # 生成每个专家对应的样本索引mask
+        # --------------------------
+        expert_sample_masks = []
+        # 遍历每个专家
+        for expert_id in range(self.num_experts):
+            # 创建mask，初始化为False
+            mask = torch.zeros(batch_size, dtype=torch.bool, device=x.device)
+            # 检查每个样本是否选择了当前专家
+            # expert_indices形状: [batch_size, topk]
+            for sample_idx in range(batch_size):
+                # 检查当前样本的topk专家中是否包含当前专家ID
+                if expert_id in expert_indices[sample_idx]:
+                    mask[sample_idx] = True
+            # 记录专家ID和对应的样本mask
+            expert_sample_masks.append(mask)
+        
+        # 返回模型输出和每个专家对应的样本mask列表
+        return moe_output, expert_sample_masks, raw_scores
 
 # 使用示例
 if __name__ == "__main__":
