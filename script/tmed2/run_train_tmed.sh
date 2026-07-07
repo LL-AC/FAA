@@ -1,5 +1,5 @@
 
-model_list=("/config/tmed/FAA_largetmed.json")
+model_list=("/config/tmed/FAA_faatmed.json")
 # 训练集路径
 data_paths=("/TMED2/approved_users_only/DEV479/TMED2_fold0_labeledpart.csv" "/TMED2/approved_users_only/DEV479/TMED2_fold1_labeledpart.csv" "/TMED2/approved_users_only/DEV479/TMED2_fold2_labeledpart.csv")
 cuda=0,1
