@@ -227,7 +227,6 @@ class Block(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x, attn[:, :, 0, 1:].softmax(dim=-1)
 
-
 class AttentionAggregation(nn.Module):
     """
     从ABMIL中提取的独立注意力聚合模块
@@ -296,16 +295,90 @@ class SimplePoolingAggregation(nn.Module):
         return x, None
 
 
-class FAA_tmed(nn.Module):
+class FAA_LARGE_tmed(nn.Module):
     def __init__(self, config, n_classes=5):
-        super(FAA_tmed, self).__init__()
+        super(FAA_LARGE_tmed, self).__init__()
 
-        pass
+        self.config = config
+        self.dim = 512
+
+        self.feature_extractor = resnet18(weights=ResNet18_Weights)
+        self.feature_extractor.fc = nn.Sequential(nn.Linear(512, self.dim), nn.ReLU())
+
+        #freeze in training
+        clip_model, _ = clip.load("RN50", device="cpu")
+        self.prompt_learner = PromptLearner(config['text_prompt'], clip_model.float())
+        self.text_encoder = TextEncoder(clip_model.float())
+        self.text_adapter = nn.Linear(1024, self.dim)
+
+        
+
+        self.a = nn.Parameter(torch.tensor(self.config['ratio']))
+
+        
+        # 多层 Transformer
+        if config['aggr'] == 'attn':
+            self.layer = AttentionAggregation(feat_dim=self.dim, hidden_dim=self.dim//4, num_class=n_classes)
+        elif config['aggr'] == 'transformer':
+            self.cls_token = nn.Parameter(torch.randn(1, 1, self.dim))
+            self.layer1 = Block(dim=self.dim, num_heads=4)
+            self.layer2 = Block(dim=self.dim, num_heads=4)
+        elif config['aggr'] == 'simple':
+            self.layer = SimplePoolingAggregation(pooling_method='max', dim=0)
+
+
+        self.move = MoVE(self.dim, view_experts=config['views'])
+        self.views = config['views']
+
+       #self.MIL_f = MIL_f
+        self.n_classes = n_classes
+
+        self.norm = nn.LayerNorm(self.dim)
+        self.fc = nn.Sequential(nn.Linear(self.dim, self.dim//4),
+                                nn.ReLU(),
+                                nn.Dropout(0.3),
+                                nn.Linear(self.dim//4, n_classes))
+
+        self.ce = nn.CrossEntropyLoss(torch.tensor([3.0, 2.0, 1.0]).cuda())
+        self.semi_ce = nn.CrossEntropyLoss(torch.tensor([3.0, 2.0, 1.0]).cuda())
+        self.view_ce = nn.CrossEntropyLoss(torch.tensor([3.0, 3.0, 1.0]).cuda())
 
     
     def MFS(self, ins_feat, prompts):
 
-        pass
+        #no choice
+        if len(ins_feat) == 0:
+            return ins_feat, None, None
+        
+
+        feats = F.normalize(ins_feat, p=2, dim=-1)  #shape [n d]
+        pro = F.normalize(prompts, p=2, dim=-1)  #shape [c d]
+
+        text_relevance = feats @ pro.t()    #shape [n c]
+
+        relevance = F.softmax(text_relevance/0.01, dim=-1)
+
+        relevance, _ = relevance.max(dim=-1)
+
+        
+        n, _ = text_relevance.shape
+        if n == 1:
+            threshold = 0
+        else:
+            threshold = relevance.mean() + self.a*relevance.std()
+                #threshold = relevance.mean() + self.config['ratio']*relevance.std()
+
+        selected_indices = relevance >= threshold
+            
+        selected_features = ins_feat[selected_indices]   # [n d]s
+
+        if len(selected_features) == 0:
+            topk_values, topk_indices = torch.topk(relevance, k=1, dim=-1)
+            selected_features = ins_feat[topk_indices]
+            selected_indices = torch.zeros_like(relevance, dtype=torch.bool)
+            selected_indices[topk_indices] = True
+        
+        return selected_features, selected_indices, text_relevance
     
     
     def PPL(self, s_fi, t_r, target_class):
@@ -328,6 +401,76 @@ class FAA_tmed(nn.Module):
 
     def AELoss(self, v_scores, view_class):
         return self.view_ce(v_scores, view_class)
-        
+    
     def forward(self, x, len_list, **kwargs):
-        pass
+
+        x = self.feature_extractor(x)
+
+        prompts = self.prompt_learner()
+        tokenized_prompts = self.prompt_learner.tokenized_prompts
+        text_features = self.text_encoder(prompts, tokenized_prompts)
+        text_features = self.text_adapter(text_features)
+
+        ini_idx = 0
+
+        y = []
+        patch_loss = torch.tensor(0.).to(x.device)
+        view_loss = torch.tensor(0.).to(x.device)
+
+        labels = kwargs['labels']
+        view_labels = kwargs['view_labels']
+
+        for i, length in enumerate(len_list):
+            ins_feat = x[ini_idx : ini_idx + length]
+            ini_idx += length
+
+            #move 视角分配
+            moe_output, expert_sample_masks, raw_scores = self.move(ins_feat)
+            view_labels[i] = view_labels[i].to(x.device)
+            view_loss += self.AELoss(raw_scores, view_labels[i])
+
+            h = []
+
+            for i in range(self.views):
+                s_f, s_fi, t_r = self.MFS(moe_output[expert_sample_masks[0]], text_features[i*(self.n_classes) : (i+1)*(self.n_classes)])
+                h.append(s_f)
+                #PPL
+                patch_loss += self.PPL(s_fi, t_r, labels[i])
+        
+
+            #filter converge
+            h = torch.concat(h, dim=0)
+
+            B = h.shape[0]
+            if self.config['aggr'] == 'transformer':
+                cls_tokens = self.cls_token.expand(1, -1, -1)
+                h = h.unsqueeze(0) 
+                h = torch.cat((cls_tokens, h), dim=1)
+                
+            # Transformer 整体聚合
+            h, attn = self.layer1(h)
+            #h = self.norm(h)
+            h, attn = self.layer2(h)
+
+            h = self.norm(h)
+
+
+            y.append(h[:, 0])
+
+        h = torch.stack(y, dim=0)    #h [B dim]
+        #h = rearrange(h, 'b c d -> (b c) d')
+        if self.config['aggr'] == 'transformer':
+            h = rearrange(h, 'b c d -> (b c) d')
+
+        logits = self.fc(h) #[B, n_classes]
+
+        loss = (patch_loss + view_loss) / len(len_list)
+        cls_loss = self.ce(logits, labels) 
+
+        loss = 1.0 * cls_loss + 0.3 * loss
+
+        results_dict = {'predicted': logits, 
+                        'loss': loss,
+                        'features': h,   #t-SNE  可视化
+                        }        
+        return results_dict
